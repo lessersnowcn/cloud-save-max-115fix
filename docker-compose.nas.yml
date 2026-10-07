@@ -1,0 +1,14 @@
+# 参考用：与你 NAS 现有那份的唯一区别就是 image 行指向你自己的镜像
+name: cloud-save-max
+services:
+  cloud-save-max:
+    image: ghcr.io/<你的GitHub用户名小写>/cloud-save-max-115fix:26.9.6-115fix
+    container_name: cloud-save-max
+    ports:
+      - 5115:5115
+    restart: unless-stopped
+    volumes:
+      - ./cloud-save-max/data:/app/backend/data
+      - ./cloud-save-max/media:/media
+      - /tmp/zfsv3/nvme11/18962260077/data/docker/litepan/strm:/strm
+      - ./cloud-save-max/nasfile:/app/backend/data/sync/nasfile
