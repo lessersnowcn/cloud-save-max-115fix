@@ -1,0 +1,49 @@
+name: 构建并推送 115 修复镜像
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "patch_115_capacity.py"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+    inputs:
+      base_tag:
+        description: "上游 base 镜像的 tag（如 26.9.6）"
+        required: true
+        default: "26.9.6"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write        # 推 ghcr.io 需要
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 计算镜像名（GHCR 要求全小写）
+        id: img
+        run: |
+          echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr 'A-Z' 'a-z')" >> "$GITHUB_OUTPUT"
+          echo "base=${{ github.event.inputs.base_tag || '26.9.6' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            BASE_IMAGE=wuanqicll/cloud-save-max:${{ steps.img.outputs.base }}
+          tags: |
+            ${{ steps.img.outputs.name }}:${{ steps.img.outputs.base }}-115fix
+            ${{ steps.img.outputs.name }}:latest-115fix
