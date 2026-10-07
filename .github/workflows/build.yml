@@ -8,8 +8,10 @@ on:
       - "patch_115_capacity.py"
       - "patch_drama_deep_search.py"
       - "patch_source_skip_notice.py"
+      - "patch_sharepreview_rootfiles.py"
       - "verify_searchfix.py"
       - "verify_source_notice.py"
+      - "verify_rootfiles_fix.py"
       - ".github/workflows/build.yml"
   workflow_dispatch:
     inputs:
@@ -18,9 +20,9 @@ on:
         required: true
         default: "26.9.6"
       suffix:
-        description: "镜像 tag 后缀：-115fix.3 = 累积三个补丁；-115fix = 覆盖旧 tag"
+        description: "镜像 tag 后缀：-115fix.4 = 累积四个补丁；-115fix = 覆盖旧 tag"
         required: true
-        default: "-115fix.3"
+        default: "-115fix.4"
 
 jobs:
   build:
@@ -36,7 +38,7 @@ jobs:
         run: |
           echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr 'A-Z' 'a-z')" >> "$GITHUB_OUTPUT"
           echo "base=${{ github.event.inputs.base_tag || '26.9.6' }}" >> "$GITHUB_OUTPUT"
-          echo "suffix=${{ github.event.inputs.suffix || '-115fix.3' }}" >> "$GITHUB_OUTPUT"
+          echo "suffix=${{ github.event.inputs.suffix || '-115fix.4' }}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
