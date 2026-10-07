@@ -1,9 +1,9 @@
 # cloud-save-max-115fix
 
-给 [cloud-save-max](https://github.com/wuanqicll-del/cloud-save-max) 打的**三个 bug 修复**镜像（115 容量解析崩溃 / 自动换链搜不到候选 / 搜索源被静默跳过）。
+给 [cloud-save-max](https://github.com/wuanqicll-del/cloud-save-max) 打的**四个 bug 修复**镜像（115 容量解析崩溃 / 自动换链搜不到候选 / 搜索源被静默跳过 / 分享根目录散放文件被忽略导致剧集不转存）。
 
-> 非官方构建。上游项目版权归其作者所有，本仓库只包含「三个补丁脚本 + 若干验证脚本 + 一个 Dockerfile」，不含上游源码。
-> 本目录是**增量更新包**（覆盖到你已有的仓库上）：新增 `patch_source_skip_notice.py`、`verify_source_notice.py`，改了 `Dockerfile`、`.github/workflows/build.yml`、`README.md`。
+> 非官方构建。上游项目版权归其作者所有，本仓库只包含「四个补丁脚本 + 若干验证脚本 + 一个 Dockerfile」，不含上游源码。
+> 本目录是**增量更新包**（覆盖到你已有的仓库上）：新增 `patch_sharepreview_rootfiles.py`、`verify_rootfiles_fix.py`，改了 `Dockerfile`、`.github/workflows/build.yml`、`README.md`。
 
 ## 修的是什么
 
@@ -86,6 +86,66 @@ if not (server and username and password):
 > 你要维护的是**密码**：**系统设置 → 资源搜索 → 搜索引擎选 CloudSaver → 密码（留空表示不修改）→ 保存**。
 > 密码对，token 过期后会自动重登并写回，不需要手填。
 
+### 修复 4：分享根目录「散放」的文件被忽略 → 剧集永远不转存（2026-10-08 追加）
+
+**现象**：追剧任务每次执行都返回 `success`，但一个文件都没转存，`/cloudsaver/电视剧` 一直是空的。
+运行日志里三行是关键：
+
+```
+待转存文件数: 1
+连贯集数过滤：无连贯集数，取消转存      ← 计划在这里被清空
+无可转存文件
+```
+
+随后后置插件打印 `跳过: 本次无新增文件`，所以连 strm 也不会生成 —— 任务「成功」，但什么也没做。
+
+**根因**：`backend/app/services/share_preview_batch.py` 的 `fetch_share_file_list_grouped()`，
+在「分享链接不带 fid」时（`extract_url()` 返回 `pdir_fid=0`，绝大多数分享都是这种）**只遍历根目录下的子目录**：
+
+```python
+detail = adapter.get_detail(pwd_id, stoken, "")
+for item in raw_items:
+    if is_dir:                       # ← 只处理目录
+        ...groups.append(...)        # ← 根下散放的文件永远进不了 groups
+```
+
+函数因此返回**空列表**。调用方 `drama_executor.py` 的「连贯集数过滤」拿到空列表 → `allowed_eps` 为空 →
+打印「连贯集数过滤：无连贯集数，取消转存」→ **把整份转存计划清空**。
+
+实测证据（同一个真实分享 `s/swstbfd3zrk`，根下就 1 个文件
+`无可替代.S01E01.第1集.2160p.WEB-DL HQ.H265.DTS 5.1.mkv`）：
+
+| 检查项 | 结果 |
+|---|---|
+| 单集解析 `_extract_episode` | `(1, 1)` —— 解析没问题 |
+| `check_consecutive_episodes(..., current_episode=0)` | `(True, [1], 1)` —— 本该放行 |
+| `fetch_share_file_list_grouped()`（**修前**） | **0 组** —— 文件被整份丢掉 |
+| `fetch_share_file_list_grouped()`（**修后**） | 1 组，含该文件 |
+
+**影响面**：凡是「分享根下直接散放视频文件、没有子文件夹」的分享（单集更新的分享很常见）都会中招，
+表现为任务一直 success 却永远转存不了。带子文件夹的分享（整季打包）不受影响。
+同一个函数还被自动换链（候选被判「跳过无法获取」）和影巢任务「自动定位目录」调用，一并修好。
+
+**改法**：在那个分支里把根目录下的非目录项也归成一组，语义与有 fid 分支的 `_collect_from_dir()` 对齐：
+
+```python
+        else:
+            root_name = str(_pick_name(item) or "").strip()
+            if not root_name:
+                continue
+            root_files.append({...})
+
+    if root_files:
+        groups.append((root_files, "", None, ""))     # 放在最后：子目录组仍是 groups[0]
+```
+
+根目录这一组**刻意放在最后**：`task_executor.py` 会取 `groups[0]` 的 fid 去「自动定位目录」，
+根组 fid 为空、被它的 `if fid:` 守卫自然跳过，所以既有行为一行不变。
+
+**构建期校验**：`verify_rootfiles_fix.py` 用桩适配器（不联网、不碰数据库）驱动**打补丁后的真代码**，
+6 个场景：根下 1 集 / 端到端连贯放行 / 根文件与子目录并存（子目录组仍排第一）/ 只有子目录（回归）/
+脏数据不崩 / 根下只有 E14。**修前这 6 个场景有 5 个失败，修后 7/7 通过。**
+
 ## 怎么用
 
 ### 1. 让它构建（GitHub Actions，免费）
@@ -93,17 +153,17 @@ if not (server and username and password):
 1. 在你已有的仓库（`cloud-save-max-115fix`）里，把本目录内容按相对路径覆盖上去
 2. commit + push 到 `main`
 3. Actions 会自动跑，构建并推送：
-   - `ghcr.io/<你的用户名小写>/cloud-save-max-115fix:26.9.6-115fix.3`
+   - `ghcr.io/<你的用户名小写>/cloud-save-max-115fix:26.9.6-115fix.4`
    - `ghcr.io/<你的用户名小写>/cloud-save-max-115fix:latest-115fix`
-4. 构建日志里会看到三行自检输出：`115补丁语法自检通过` / `搜索补丁语法自检通过` / `搜索源提示补丁语法自检通过`，
-   加上 `全部 7 个场景通过`。**任何一步不过，构建就是红的**，不会推一个带病的镜像
+4. 构建日志里会看到四行自检输出：`115补丁语法自检通过` / `搜索补丁语法自检通过` / `搜索源提示补丁语法自检通过` / `根目录文件归组补丁语法自检通过`，
+   外加三套场景校验的小结（补丁4 那套是 `[verify] 小结: 7/7 通过`）。**任何一步不过，构建就是红的**，不会推一个带病的镜像
 
 ### 2. NAS 上切过去
 
 把现有 `docker-compose.yml` 的 `image:` 行改成你的镜像，然后重新部署（极空间 Docker 界面的 Compose 里改，别只改宿主机文件）：
 
 ```yaml
-    image: ghcr.io/<你的用户名小写>/cloud-save-max-115fix:26.9.6-115fix.3
+    image: ghcr.io/<你的用户名小写>/cloud-save-max-115fix:26.9.6-115fix.4
 ```
 
 > 搜索结果有 **300 秒缓存**（`preview_cache_ttl_seconds`），切过去后最多 5 分钟就是新行为；急着重启一下容器即可。
@@ -111,7 +171,7 @@ if not (server and username and password):
 ### 3. 上游升级
 
 Actions 页面点 **Run workflow**，把 `base_tag` 填成新版本（如 `26.10.1`）即可；
-新镜像 tag 就是 `26.10.1-115fix.3`（后缀可在同一次运行里改）。如果上游已经自己修了某个 bug，
+新镜像 tag 就是 `26.10.1-115fix.4`（后缀可在同一次运行里改）。如果上游已经自己修了某个 bug，
 构建会**失败**（找不到锚点），那就说明对应补丁可以退休了。
 
 ## 镜像 tag 怎么选
@@ -119,10 +179,11 @@ Actions 页面点 **Run workflow**，把 `base_tag` 填成新版本（如 `26.10
 | tag | 内容 |
 |---|---|
 | `26.9.6-115fix` | 只有 115 容量修复（v1，已在 ghcr） |
-| `26.9.6-115fix.3` | 115 容量修复 + 自动换链搜索兜底 + 搜索源跳过原因回传（当前推荐） |
+| `26.9.6-115fix.3` | 115 容量修复 + 自动换链搜索兜底 + 搜索源跳过原因回传（v3） |
+| `26.9.6-115fix.4` | 再加「分享根目录散放文件归组」修复（**当前推荐**） |
 | `latest-115fix` | 始终指向最近一次构建（移动别名） |
 
-回滚就是把 compose 的 image 行改回 `26.9.6-115fix`。
+回滚就是把 compose 的 image 行改回 `26.9.6-115fix.3` 或 `26.9.6-115fix`。
 
 ## 为什么不直接用官方镜像 + 本地改
 
@@ -134,6 +195,8 @@ Actions 页面点 **Run workflow**，把 `base_tag` 填成新版本（如 `26.10
 
 - **镜像里不含你的任何账号信息或数据**：只有官方 base 层 + 三个改过的 `.py`。你的 115 cookie、SQLite 都在 NAS 的 `./cloud-save-max/data` 卷里
 - **建议 public 仓库**：GHCR 包会继承仓库可见性。仓库 public → 包 public → NAS 直接拉，不用登录；private → NAS 拉取要 `docker login`（那就要 shell 了，等于绕回原点）
+- 补丁4 动的是公共函数 `fetch_share_file_list_grouped()`：除了剧集转存，自动换链的候选获取、影巢任务自动定位目录也走它，一起受益
+- 补丁4 会把根目录下的非视频文件（`.nfo` / `.jpg` 等）也归进「根目录组」，但连贯性判断里的 `_is_video_file()` 会跳过它们，转存计划仍按任务的 `pattern` 过滤
 - 补丁只覆盖 `size_used_raw` / `size_total_raw` 两处。**同类隐患未修**：`cloud189_adapter.py` 里 `int(cloud_capacity.get("usedSize", 0))` 有一样的味道
 - 修复 3 只覆盖 CloudSaver 这一条源；PanSou 仍是静默跳过（它是 `refresh` 走的实时抓取，失败多为上游网络抖动，怕刷屏）
 - 另有一个上游行为要注意：`PATCH /accounts/{id}/status` 在探测不是 active 时会把账号**自动置为 enabled=False**，别反复点启用开关
